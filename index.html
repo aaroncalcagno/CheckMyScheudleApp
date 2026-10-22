@@ -124,7 +124,7 @@ async function cPush(){
   catch(e){
     undo.forEach(([k,r,o])=>{if(o===undefined)CL.sh[k].delete(r);else CL.sh[k].set(r,o)});CL.cfg=cfgOld;
     if(cNet(e)){CL.rt=Math.min((CL.rt||2)*2,60);setTimeout(cPush,CL.rt*1000)}
-    else if(Date.now()-CL.errT>5000){CL.errT=Date.now();toast(/code_taken/.test(e.message||'')?'That access code is already used by another business.':"Some changes couldn't be saved, so the latest shared version was loaded.");try{CL.busy=0;await cLoad();cRender()}catch(e2){}}
+    else if(Date.now()-CL.errT>5000){CL.errT=Date.now();toast(/code_taken/.test(e.message||'')?'That access code is already used by another business.':"Some changes couldn't be saved ("+String(e.message||'error').slice(0,90)+"). Loaded the latest shared version.");try{CL.busy=0;await cLoad();cRender()}catch(e2){}}
   }
   CL.busy=0;if(CL.again){CL.again=0;cPushSoon()}}
 /* ---- receive other people's changes ---- */
@@ -153,12 +153,17 @@ document.addEventListener('visibilitychange',()=>{if(CLOUD&&CL.on&&!document.hid
 addEventListener('online',()=>{if(CLOUD&&CL.on)cResync()});
 /* ---- session start / end ---- */
 function cReset(){U=null;VA=null;P=[];S=[];PUB=[];T=[];AQ=[];CH=[];N=[];LG=[];CR=[];SNAP=[];B={};ORD={};WX={};LOC.length=0;LP=[];LL=[];LC=[];HRS=[];BIZ='ClockInLockIn';CL.on=false;CL.bid=null;CL.sh={};CLK.forEach(k=>CL.sh[k]=new Map());CL.cfg='';CL.codes='';CL.mg={}}
-async function cEnter(){
-  const{data:m,error}=await sb.rpc('my_membership');if(error)throw error;
+async function cEnter(heal){
+  let{data:m,error}=await sb.rpc('my_membership');if(error)throw error;
+  if(!m&&heal&&SIC){const fu=await sb.rpc('find_unclaimed',{p_code:SIC,p_name:heal.name}),pid0=fu.data&&fu.data.data?Number(fu.data.id):nid();const j=await sb.rpc('join_business',{p_code:SIC,p_person:pid0});if(!j.error)m=(await sb.rpc('my_membership')).data}
   if(!m){await sb.auth.signOut();return false}
   CL.bid=m.biz_id;CL.pid=Number(m.person_id);CL.mgr=!!m.is_mgr;
   await cLoad();
-  if(!P.some(p=>p.id==CL.pid))return false;
+  if(!P.some(p=>p.id==CL.pid)){
+    if(!heal)return false;
+    const lc=Number(CL.pre&&CL.pre.loc_index)||0,mg=!!m.is_mgr,np={id:CL.pid,name:heal.name,role:mg?RN.GM:'Customer Service Teammate',pos:mg?'GM':'E',loc:lc,home:lc,editor:0,av:[0,1,2,3,4,5,6].map(()=>[6,22])};
+    const r=await sb.from('records').upsert([{biz_id:CL.bid,kind:'P',rid:String(CL.pid),data:np,aud:null}],{onConflict:'biz_id,kind,rid'});if(r.error)throw r.error;
+    P.push(np);CL.sh.P.set(String(CL.pid),cj(cSer('P',np)))}
   id=sid=cid=aid=RID=nid();
   const dv=cDevLoad();U=CL.pid;const me0=P.find(p=>p.id==U);CL.mgr=isA(me0)||CL.mgr;L=me0.loc>=0?me0.loc:(Number.isInteger(dv.L)&&dv.L<LOC.length?dv.L:0);
   CL.on=true;cSubscribe();return true}
@@ -182,7 +187,7 @@ async function cDoIn(){
   const btn=document.querySelector('.auth-bd .pr');btn&&(btn.disabled=true);
   try{const em=await cEmail(n,CL.pre.biz_id);const{error}=await sb.auth.signInWithPassword({email:em,password:pw});
     if(error){if(cNet(error))return aerr(cErr(error));FAILN++;if(FAILN>=5){FAILN=0;LOCKU=Date.now()+30000;return aerr('Too many tries. Wait 30 seconds, or use Forgot password.')}return aerr('Name or password is incorrect.'+(FAILN>=3?' Forgot it? Use Forgot password.':''))}
-    FAILN=0;if(!(await cEnter())){await sb.auth.signOut();cReset();await cPre();return aerr('That account is no longer part of this business.')}
+    FAILN=0;if(!(await cEnter({name:n.trim()}))){await sb.auth.signOut();cReset();await cPre();return aerr('That account is no longer part of this business.')}
     try{localStorage.setItem('gocw-lastin',JSON.stringify({f:nrm($('#a1').value),l:nrm($('#a2').value)}))}catch(e){}
     go(U);if(pw===DEFPW)setTimeout(pwForce,400)}
   catch(e){aerr(cErr(e))}finally{btn&&(btn.disabled=false)}}
@@ -201,6 +206,9 @@ async function cDoUp(){
     const base={name:nm,role:'Customer Service Teammate',pos:'E',loc:lc,home:lc,editor:0,av:[0,1,2,3,4,5,6].map(()=>[6,22])};
     const p={...base,...(old?old.data:{}),id:pid,bd:SU.bd,phone:ph};delete p.pw;
     const ix=P.findIndex(x=>x.id==pid);if(ix>=0)P[ix]=p;else P.push(p);
+    const sv=await sb.from('records').upsert([{biz_id:CL.bid,kind:'P',rid:String(pid),data:cSer('P',p),aud:null}],{onConflict:'biz_id,kind,rid'});
+    if(sv.error){cReset();await cPre();return aerr("Your account was created but your profile couldn't be saved ("+(sv.error.message||'error')+"). Try signing in.")}
+    CL.sh.P.set(String(pid),cj(cSer('P',p)));
     CL.pid=pid;CL.mgr=false;id=sid=cid=aid=RID=nid();cDevLoad();U=pid;CL.on=true;cSubscribe();
     notify(mgrs(lc),nm+' joined '+(LOC[lc]||'your location')+'.');
     SU={step:1,f:'',l:'',code:'',ph:'',bd:''};go(p.id);cPush()}
